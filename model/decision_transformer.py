@@ -122,17 +122,36 @@ class NurikabeDT(nn.Module):
 
         # state, action, and return
     def forward(self, states, actions, targets=None, rtgs=None, timesteps=None):
-        # states: (batch, block_size, 4*84*84)
-        # actions: (batch, block_size, 1)
-        # targets: (batch, block_size, 1)
-        # rtgs: (batch, block_size, 1)
+        # for nurikabe, we want
+        # states: (batch, seq_len, 25x25), where 25 is max world size
+        # actions: (batch, seq_len, 1), where each action is an index representation of a tuple, e.g.
+        #   if actions is (r=3, c=4, 0) on a 5x5 grid, then action is 3*5+4 (flattened cell index) + 0 (action)
+        # rtgs: (batch, seq_len, 1)
+        # targets: (batch, seq_len, 1) (same as actions)
         # timesteps: (batch, 1, 1)
 
-        state_embeddings = self.state_encoder(states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()) # (batch * block_size, n_embd)
-        state_embeddings = state_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd) # (batch, block_size, n_embd)
+        # this should now be B, T, NxN, D where N is max world size
+        # state_embeddings = self.state_encoder(states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()) # (batch * block_size, n_embd)
+        # state_embeddings = state_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd) # (batch, block_size, n_embd)
+
+        state_embeddings = self.state_encoder(states) # now B, T, NxN, n_embd where N is max world size
+
+        # add learned positional embeddings to state embeddings
+        state_embeddings = state_embeddings + self.state_pos_emb.weight
+
+        B, T, _, _ = state_embeddings.size()
+
+        # TODO
+        # maybe we can do a linear layer here to reduce C_d? Right now it's NxNxn_embd, which seems a bit large
+        # or maybe we can sum them all up to get one embedding of shape B, T, n_embd?
+        state_embeddings = state_embeddings.reshape(B, T, -1)  # concatenate cell embeddings together to get entire state (grid) embedding, now B, T, C_d
+
         
         if actions is not None and self.model_type == 'reward_conditioned': 
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
+            # TODO:
+            # action_embeddings is now size B, T, n_embd
+            # depending on what we do with the state embeddings, might need to change the dimensions here
             action_embeddings = self.action_embeddings(actions.type(torch.long).squeeze(-1)) # (batch, block_size, n_embd)
 
             token_embeddings = torch.zeros((states.shape[0], states.shape[1]*3 - int(targets is None), self.config.n_embd), dtype=torch.float32, device=state_embeddings.device)
