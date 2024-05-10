@@ -1,2 +1,6 @@
 *.npz
 data/
+.vscode/*
+__pycache__/
+
+!data/*.py
