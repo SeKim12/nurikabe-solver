@@ -27,7 +27,6 @@ class NurikabeEnv(gym.Env):
              spaces.Discrete(self.full_height, start=0))
         )
 
-        self.board = None
         self.all_solution_path = all_solution_path  # can take a more lightweight approach by not saving in memory
         self._load_all_solutions()
         self.solution_board_index = 0
@@ -39,28 +38,26 @@ class NurikabeEnv(gym.Env):
         
     
     def step(self, action):
-        
         _action, x, y = action
 
         if not self.action_space.contains(action):
             print(f'{action} is not a valid action!')
-            observation = np.copy(self.board)
+            observation = np.copy(self.current_board)
             reward = -np.inf
             terminated = False
             out_of_bound = True
             done = False
             info = {}
-            
             return observation, reward, terminated, out_of_bound, done, info
 
         done = False
 
         if self.solution_board[x, y] == _action:
-            self.board_copy = np.copy(self.board)
-            self.board_copy[x, y] = _action
-            if (self.board_copy == self.solution_board).all():
+            self.current_board[x, y] = _action
+            self.current_board = np.copy(self.current_board)
+            if (self.current_board == self.solution_board).all():
                 done = True
-                observation = np.copy(self.board_copy)
+                observation = np.copy(self.solution_board)
                 reward = 100
                 terminated = True
                 out_of_bound = False
@@ -68,7 +65,7 @@ class NurikabeEnv(gym.Env):
                 return observation, reward, terminated, out_of_bound, done, info
             else:
                 done = False
-                observation = np.copy(self.board_copy)
+                observation = np.copy(self.current_board)
                 reward = 1
                 terminated = False
                 out_of_bound = False
@@ -76,7 +73,7 @@ class NurikabeEnv(gym.Env):
                 return observation, reward, terminated, out_of_bound, done, info
         else:
             done = False
-            observation = np.copy(self.board)
+            observation = np.copy(self.current_board)
             reward = -np.inf if self.solution_board[x, y] >= 1 else -1
             terminated = False
             out_of_bound = False
@@ -91,8 +88,13 @@ class NurikabeEnv(gym.Env):
         
         self.solution_board = np.full((self.full_width, self.full_height), -3)
         self.solution_board[:self.width, :self.height] = self.original_solution_board
-      
-        observation = np.copy(self.solution_board)
+
+        self.current_board = np.where(
+            (self.solution_board == 0) | (self.solution_board == -1),
+            -2, self.solution_board
+        )
+        observation = np.copy(self.current_board)
+        
         info = {}
         return observation, info
     
