@@ -13,10 +13,10 @@ def load_trajectory(path_to_csv):
         reader = csv.reader(file)
         w, h = 0, 0
         for i, row in enumerate(reader):
-            row = list(int(x) for x in row)
             # this indicates the number of cells solved
-            if len(row) == 1:
+            if len(row) == 1 or 'seconds' in row[-1]:
                 continue
+            row = [int(x) for x in row]
             if i == 0:
                 w, h = row
             else:

@@ -48,7 +48,7 @@ public:
     int known() const;
 
     void write(ostream& os, steady_clock::time_point start, steady_clock::time_point finish) const;
-    void end_trajectory(const int known);
+    void end_trajectory(const int known, const string& time_repr);
 
 private:
     // The states that a cell can be in. Numbered cells are positive,
@@ -497,7 +497,7 @@ int main(int argc, char *argv[]) {
 
             const int k = g.known();
 
-            g.end_trajectory(k);
+            g.end_trajectory(k, format_time(start, finish));
 
             const int cells = puzzle.w * puzzle.h;
 
@@ -1145,10 +1145,10 @@ void Grid::start_trajectory(int w, int h) {
     return;
 }
 
-void Grid::end_trajectory(const int known) {
+void Grid::end_trajectory(const int known, const string& time_repr) {
     string file_name = "tmp/" + name + ".csv";
     ofstream outfile(file_name.c_str(), ios::app);
-    outfile << known << endl;
+    outfile << known << "," << time_repr << endl;
     return;
 }
 
