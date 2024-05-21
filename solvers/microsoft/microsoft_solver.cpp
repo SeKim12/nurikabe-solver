@@ -34,7 +34,7 @@ using namespace std::chrono;
 
 class Grid {
 public:
-    Grid(int width, int height, const string& s);
+    Grid(int width, int height, const string& s, const string& name);
 
     enum SitRep {
         CONTRADICTION_FOUND,
@@ -48,6 +48,7 @@ public:
     int known() const;
 
     void write(ostream& os, steady_clock::time_point start, steady_clock::time_point finish) const;
+    void end_trajectory(const int known);
 
 private:
     // The states that a cell can be in. Numbered cells are positive,
@@ -217,6 +218,12 @@ private:
     // This is used to guess cells in a deterministic but pseudorandomized order.
     mt19937 m_prng;
 
+    // const string puzzle_name;
+    const string name;
+    vector<int> flat_grid_running;
+    void flush_state();
+    void start_trajectory(int w, int h);
+
     Grid(const Grid& other);
     Grid& operator=(const Grid&) = delete;
 };
@@ -235,7 +242,7 @@ string format_time(const steady_clock::time_point start, const steady_clock::tim
     return oss.str();
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     struct Puzzle {
         const char * name;
         int w;
@@ -243,222 +250,255 @@ int main() {
         const char * s;
     };
 
-    const array<Puzzle, 12> puzzles = { {
-        {
-            "wikipedia_hard", 10, 9,
-            "2        2\n"
-            "      2   \n"
-            " 2  7     \n"
-            "          \n"
-            "      3 3 \n"
-            "  2    3  \n"
-            "2  4      \n"
-            "          \n"
-            " 1    2 4 \n"
-        },
+    int numPuzzles = stoi(argv[1]);
 
-        {
-            "wikipedia_easy", 10, 10,
-            "1   4  4 2\n"
-            "          \n"
-            " 1   2    \n"
-            "  1   1  2\n"
-            "1    3    \n"
-            "  6      5\n"
-            "          \n"
-            "     1   2\n"
-            "    2  2  \n"
-            "          \n"
-        },
+    printf("Solving %d puzzles...\n", numPuzzles);
 
-        {
-            "nikoli_1", 10, 10,
-            "       5 2\n"
-            "3         \n"
-            " 4  2     \n"
-            "      3   \n"
-            " 4   4    \n"
-            "         3\n"
-            "          \n"
-            "          \n"
-            " 3  3     \n"
-            "  1  1 3 3\n"
-        },
+    Puzzle *puzzles = new Puzzle[numPuzzles]; 
 
-        {
-            "nikoli_2", 10, 10,
-            "6 2 3    3\n"
-            "          \n"
-            "         4\n"
-            "          \n"
-            "    2    2\n"
-            "3    5    \n"
-            "          \n"
-            "3         \n"
-            "          \n"
-            "4    5 4 1\n"
-        },
+    for (int i = 0; i < numPuzzles; i++) {
+        char *puzzleName = argv[2 + (4 * i)];
+        int w = stoi(argv[2 + (4 * i) + 1]); 
+        int h = stoi(argv[2 + (4 * i) + 2]);
 
-        {
-            "nikoli_3", 10, 10,
-            " 3    4   \n"
-            "     6    \n"
-            "       2  \n"
-            "      3   \n"
-            "        2 \n"
-            " 4     3  \n"
-            "         1\n"
-            " 10      3 \n"
-            "          \n"
-            "  3      2\n"
-        },
+        // num cells, newline per row
+        int numChars = h*w + 9;
+        char *puzzleStr = new char[numChars]; 
 
-        {
-            "nikoli_4", 18, 10,
-            "  4            1 3\n"
-            " 3    5   1 2     \n"
-            "       5 3        \n"
-            "            2 3   \n"
-            "  4             3 \n"
-            " 3             4  \n"
-            "   1 1            \n"
-            "        3 4       \n"
-            "     1 1   5    5 \n"
-            "4 4            3  \n"
-        },
+        for (int j = 0; j < numChars; j++) {
+            char ch = *(argv[2 + (4 * i) + 3] + j);
+            if (ch == '*') {
+                puzzleStr[j] = '\n';
+            } else {
+                puzzleStr[j] = ch;
+            }
+        }
 
+        puzzles[i] = 
         {
-            "nikoli_5", 18, 10,
-            " 1 1    1     1   \n"
-            "    5    2     1  \n"
-            "        1     1   \n"
-            "     5         1  \n"
-            "1 1       4   1   \n"
-            " 1     3     7    \n"
-            "  3              6\n"
-            "    4   2  4      \n"
-            "      5         5 \n"
-            " 1           5    \n"
-        },
+            puzzleName, w, h,
+            puzzleStr
+        };
+    }
 
-        {
-            "nikoli_6", 18, 10,
-            "                  \n"
-            "1    12     3 12    \n"
-            "                 2\n"
-            "2    3     3    3 \n"
-            "    1     1       \n"
-            "3    1            \n"
-            "   2  2 3 2       \n"
-            "2           1     \n"
-            "  3               \n"
-            "1              12 1\n"
-        },
+    // const array<Puzzle, 12> puzzles = { {
+    //     {
+    //         "wikipedia_hard", 10, 9,
+    //         "2        2\n"
+    //         "      2   \n"
+    //         " 2  7     \n"
+    //         "          \n"
+    //         "      3 3 \n"
+    //         "  2    3  \n"
+    //         "2  4      \n"
+    //         "          \n"
+    //         " 1    2 4 \n"
+    //     },
 
-        {
-            "nikoli_7", 24, 14,
-            "    5                   \n"
-            "          2 6    7 3   4\n"
-            "  1    5        3 5     \n"
-            " 7   6                 1\n"
-            "        4               \n"
-            "   1      1   5      3  \n"
-            "  2  3                  \n"
-            "        3   3   2  7    \n"
-            "                        \n"
-            "6   1    5   5   1    5 \n"
-            "      6        5     3  \n"
-            "   4               4    \n"
-            " 5          1           \n"
-            "        3 4     5       \n"
-        },
+    //     {
+    //         "wikipedia_easy", 10, 10,
+    //         "1   4  4 2\n"
+    //         "          \n"
+    //         " 1   2    \n"
+    //         "  1   1  2\n"
+    //         "1    3    \n"
+    //         "  6      5\n"
+    //         "          \n"
+    //         "     1   2\n"
+    //         "    2  2  \n"
+    //         "          \n"
+    //     },
 
-        {
-            "nikoli_8", 24, 14,
-            "    2 1           5 5   \n"
-            "  4             12     1 \n"
-            " 7      1               \n"
-            "              1        3\n"
-            "          7             \n"
-            "6            5          \n"
-            "           6           1\n"
-            "9           15           \n"
-            "          3            3\n"
-            "             8          \n"
-            "2        8              \n"
-            "               4      3 \n"
-            " 4     5             3  \n"
-            "   8 3           2 4    \n"
-        },
+    //     {
+    //         "nikoli_1", 10, 10,
+    //         "       5 2\n"
+    //         "3         \n"
+    //         " 4  2     \n"
+    //         "      3   \n"
+    //         " 4   4    \n"
+    //         "         3\n"
+    //         "          \n"
+    //         "          \n"
+    //         " 3  3     \n"
+    //         "  1  1 3 3\n"
+    //     },
 
-        {
-            "nikoli_9", 36, 20,
-            "2   2  1  1               1         \n"
-            "   4    3        9      8      5    \n"
-            "      1        7                   5\n"
-            "4      1  1  4              2    1  \n"
-            "      2  3         2         1 3    \n"
-            "4   2           5    2              \n"
-            "       1  1 17          3 4        4 \n"
-            "                 9              21  2\n"
-            "2       2                 4         \n"
-            "  7  4            3   13             \n"
-            "          1               6    1    \n"
-            "  4      2    9  1                  \n"
-            "     6               3          9   \n"
-            "22                  1      8  1      \n"
-            "   1   6   1   4                    \n"
-            "    2     2     1      1       1   1\n"
-            "                  4     2           \n"
-            "   3 3   2   2       8      2     3 \n"
-            "            1              1        \n"
-            "                3       5       5   \n"
-        },
+    //     {
+    //         "nikoli_2", 10, 10,
+    //         "6 2 3    3\n"
+    //         "          \n"
+    //         "         4\n"
+    //         "          \n"
+    //         "    2    2\n"
+    //         "3    5    \n"
+    //         "          \n"
+    //         "3         \n"
+    //         "          \n"
+    //         "4    5 4 1\n"
+    //     },
 
-        {
-            "nikoli_10", 36, 20,
-            "           4            2           \n"
-            "3 4          2   7         8      2 \n"
-            "    7      5   1   8 5   1  2  4   2\n"
-            "6    4       3          2 2         \n"
-            "           6                   4    \n"
-            "    2             1  2           2  \n"
-            "        1       4     4    4  1     \n"
-            " 1                  3            4 4\n"
-            "     2     4  4            4        \n"
-            "       5  3                   2 4   \n"
-            " 5 1              1    3   8   2    \n"
-            "     1   2                          \n"
-            "2            2 5           4     2 1\n"
-            "                             2      \n"
-            "1  2   4  7   18   1            1   1\n"
-            "                     2   8 4        \n"
-            "    3           18     1          4  \n"
-            "                 4                4 \n"
-            "      3 1   4      4    2    4   4  \n"
-            "6      1  3                 4       \n"
-        },
-    } };
+    //     {
+    //         "nikoli_3", 10, 10,
+    //         " 3    4   \n"
+    //         "     6    \n"
+    //         "       2  \n"
+    //         "      3   \n"
+    //         "        2 \n"
+    //         " 4     3  \n"
+    //         "         1\n"
+    //         " 10      3 \n"
+    //         "          \n"
+    //         "  3      2\n"
+    //     },
+
+    //     {
+    //         "nikoli_4", 18, 10,
+    //         "  4            1 3\n"
+    //         " 3    5   1 2     \n"
+    //         "       5 3        \n"
+    //         "            2 3   \n"
+    //         "  4             3 \n"
+    //         " 3             4  \n"
+    //         "   1 1            \n"
+    //         "        3 4       \n"
+    //         "     1 1   5    5 \n"
+    //         "4 4            3  \n"
+    //     },
+
+    //     {
+    //         "nikoli_5", 18, 10,
+    //         " 1 1    1     1   \n"
+    //         "    5    2     1  \n"
+    //         "        1     1   \n"
+    //         "     5         1  \n"
+    //         "1 1       4   1   \n"
+    //         " 1     3     7    \n"
+    //         "  3              6\n"
+    //         "    4   2  4      \n"
+    //         "      5         5 \n"
+    //         " 1           5    \n"
+    //     },
+
+    //     {
+    //         "nikoli_6", 18, 10,
+    //         "                  \n"
+    //         "1    12     3 12    \n"
+    //         "                 2\n"
+    //         "2    3     3    3 \n"
+    //         "    1     1       \n"
+    //         "3    1            \n"
+    //         "   2  2 3 2       \n"
+    //         "2           1     \n"
+    //         "  3               \n"
+    //         "1              12 1\n"
+    //     },
+
+    //     {
+    //         "nikoli_7", 24, 14,
+    //         "    5                   \n"
+    //         "          2 6    7 3   4\n"
+    //         "  1    5        3 5     \n"
+    //         " 7   6                 1\n"
+    //         "        4               \n"
+    //         "   1      1   5      3  \n"
+    //         "  2  3                  \n"
+    //         "        3   3   2  7    \n"
+    //         "                        \n"
+    //         "6   1    5   5   1    5 \n"
+    //         "      6        5     3  \n"
+    //         "   4               4    \n"
+    //         " 5          1           \n"
+    //         "        3 4     5       \n"
+    //     },
+
+    //     {
+    //         "nikoli_8", 24, 14,
+    //         "    2 1           5 5   \n"
+    //         "  4             12     1 \n"
+    //         " 7      1               \n"
+    //         "              1        3\n"
+    //         "          7             \n"
+    //         "6            5          \n"
+    //         "           6           1\n"
+    //         "9           15           \n"
+    //         "          3            3\n"
+    //         "             8          \n"
+    //         "2        8              \n"
+    //         "               4      3 \n"
+    //         " 4     5             3  \n"
+    //         "   8 3           2 4    \n"
+    //     },
+
+    //     {
+    //         "nikoli_9", 36, 20,
+    //         "2   2  1  1               1         \n"
+    //         "   4    3        9      8      5    \n"
+    //         "      1        7                   5\n"
+    //         "4      1  1  4              2    1  \n"
+    //         "      2  3         2         1 3    \n"
+    //         "4   2           5    2              \n"
+    //         "       1  1 17          3 4        4 \n"
+    //         "                 9              21  2\n"
+    //         "2       2                 4         \n"
+    //         "  7  4            3   13             \n"
+    //         "          1               6    1    \n"
+    //         "  4      2    9  1                  \n"
+    //         "     6               3          9   \n"
+    //         "22                  1      8  1      \n"
+    //         "   1   6   1   4                    \n"
+    //         "    2     2     1      1       1   1\n"
+    //         "                  4     2           \n"
+    //         "   3 3   2   2       8      2     3 \n"
+    //         "            1              1        \n"
+    //         "                3       5       5   \n"
+    //     },
+
+    //     {
+    //         "nikoli_10", 36, 20,
+    //         "           4            2           \n"
+    //         "3 4          2   7         8      2 \n"
+    //         "    7      5   1   8 5   1  2  4   2\n"
+    //         "6    4       3          2 2         \n"
+    //         "           6                   4    \n"
+    //         "    2             1  2           2  \n"
+    //         "        1       4     4    4  1     \n"
+    //         " 1                  3            4 4\n"
+    //         "     2     4  4            4        \n"
+    //         "       5  3                   2 4   \n"
+    //         " 5 1              1    3   8   2    \n"
+    //         "     1   2                          \n"
+    //         "2            2 5           4     2 1\n"
+    //         "                             2      \n"
+    //         "1  2   4  7   18   1            1   1\n"
+    //         "                     2   8 4        \n"
+    //         "    3           18     1          4  \n"
+    //         "                 4                4 \n"
+    //         "      3 1   4      4    2    4   4  \n"
+    //         "6      1  3                 4       \n"
+    //     },
+    // } };
 
     try {
-        for (const auto& puzzle : puzzles) {
+        for (int i = 0; i < numPuzzles; i++) {
+            Puzzle puzzle = puzzles[i];
             const auto start = steady_clock::now();
 
-            Grid g(puzzle.w, puzzle.h, puzzle.s);
+            Grid g(puzzle.w, puzzle.h, puzzle.s, puzzle.name);
 
             while (g.solve() == Grid::KEEP_GOING) { }
-
             const auto finish = steady_clock::now();
 
-
-            ofstream f(puzzle.name + string(".html"));
+            string fname = "tmp/";
+            ofstream f(fname + puzzle.name + string(".html"));
 
             g.write(f, start, finish);
-
 
             cout << puzzle.name << ": " << format_time(start, finish) << ", ";
 
             const int k = g.known();
+
+            g.end_trajectory(k);
+
             const int cells = puzzle.w * puzzle.h;
 
             cout << k << "/" << cells << " (" << k * 100.0 / cells << "%) solved" << endl;
@@ -472,12 +512,11 @@ int main() {
     }
 }
 
-Grid::Grid(const int width, const int height, const string& s)
+Grid::Grid(const int width, const int height, const string& s, const string &name)
     : m_width(width), m_height(height), m_total_black(width * height),
-    m_cells(), m_regions(), m_sitrep(KEEP_GOING), m_output(), m_prng(1729) {
+    m_cells(), m_regions(), m_sitrep(KEEP_GOING), m_output(), m_prng(1729), name(name), flat_grid_running(width * height, 0) {
 
     // Validate width and height.
-
     if (width < 1) {
         throw runtime_error("RUNTIME ERROR: Grid::Grid() - width must be at least 1.");
     }
@@ -496,13 +535,11 @@ Grid::Grid(const int width, const int height, const string& s)
     vector<int> v;
 
     const regex r(R"((\d+)|( )|(\n)|[^\d \n])");
-
     for (sregex_iterator i(s.begin(), s.end(), r), end; i != end; ++i) {
         const smatch& m = *i;
-
         if (m[1].matched) {
             v.push_back(stoi(m[1]));
-        } else if (m[2].matched) {
+        } else if (m[2].matched) { 
             v.push_back(0);
         } else if (m[3].matched) {
             // Do nothing.
@@ -514,8 +551,7 @@ Grid::Grid(const int width, const int height, const string& s)
 
     // Validate the number of cells. Note that we can't do this before
     // parsing, because numbers 10 and above occupy multiple characters.
-
-    if (v.size() != static_cast<size_t>(width * height)) {
+    if (v.size() != static_cast<size_t>(width * height)) {  
         throw runtime_error("RUNTIME ERROR: Grid::Grid() - "
             "s must contain width * height numbers and spaces.");
     }
@@ -548,9 +584,12 @@ Grid::Grid(const int width, const int height, const string& s)
 
                 m_total_black -= n;
             }
+            flat_grid_running[x + y * width] = static_cast<int>(cell(x, y));
         }
     }
-
+    
+    start_trajectory(width, height);
+    flush_state();
     print("I'm okay to go!");
 }
 
@@ -593,7 +632,7 @@ Grid::SitRep Grid::solve(const bool verbose, const bool guessing) {
         || detect_contradictions(verbose, cache)
         || analyze_confinement(verbose, cache)
         || (guessing && analyze_hypotheticals(verbose))) {
-
+        
         return m_sitrep;
     }
 
@@ -1074,20 +1113,63 @@ void Grid::print(const string& s, const set<pair<int, int>>& updated,
     m_output.push_back(make_tuple(s, v, updated, steady_clock::now(), failed_guesses, failed_coords));
 }
 
+void Grid::flush_state() {
+    string file_name = "tmp/" + name + ".csv";
+    ofstream outfile(file_name.c_str(), ios::app);
+
+    if (outfile.is_open()) {
+        for (int i = 0; i < flat_grid_running.size(); ++i) {
+            outfile << flat_grid_running[i];
+            if (i < flat_grid_running.size() - 1) {
+                outfile << ",";
+            }
+        }
+        outfile << endl;
+    }
+    return;
+}
+
+void Grid::start_trajectory(int w, int h) {
+    string file_name = "tmp/" + name + ".csv";
+    ofstream outfile(file_name.c_str(), ios::trunc);
+
+    if (outfile.is_open()) {
+        for (int i = 0; i < 2; ++i) {
+            outfile << ((i == 0) ? w : h);
+            if (i != 1) {
+                outfile << ",";
+            }
+        }
+        outfile << endl;
+    }
+    return;
+}
+
+void Grid::end_trajectory(const int known) {
+    string file_name = "tmp/" + name + ".csv";
+    ofstream outfile(file_name.c_str(), ios::app);
+    outfile << known << endl;
+    return;
+}
+
 bool Grid::process(const bool verbose, const set<pair<int, int>>& mark_as_black,
     const set<pair<int, int>>& mark_as_white, const string& s,
     const int failed_guesses, const set<pair<int, int>>& failed_coords) {
-
+    
     if (mark_as_black.empty() && mark_as_white.empty()) {
         return false;
     }
 
     for (const auto& [ x, y ] : mark_as_black) {
         mark(BLACK, x, y);
+        flat_grid_running[x + y * m_width] = static_cast<int>(cell(x, y));
+        flush_state(); 
     }
 
     for (const auto& [ x, y ] : mark_as_white) {
         mark(WHITE, x, y);
+        flat_grid_running[x + y * m_width] = static_cast<int>(cell(x, y));
+        flush_state(); 
     }
 
     if (verbose) {
@@ -1336,7 +1418,7 @@ bool Grid::unreachable(const int x_root, const int y_root, set<pair<int, int>> d
             }
         }
 
-        for_valid_neighbors(x_curr, y_curr, [&](const int x, const int y) {
+        for_valid_neighbors(x_curr, y_curr, [&, n_curr=n_curr](const int x, const int y) {
             if (cell(x, y) == UNKNOWN && discovered.insert(make_pair(x, y)).second) {
                 q.push(make_tuple(x, y, n_curr + 1));
             }
@@ -1579,8 +1661,11 @@ Grid::Grid(const Grid& other)
     m_regions(),
     m_sitrep(other.m_sitrep),
     m_output(), // Intentionally not copied to increase performance. This copy ctor is private.
-    m_prng(other.m_prng) {
+    m_prng(other.m_prng),
+    name(other.name) {
 
+    flat_grid_running = other.flat_grid_running;
+    
     for (const auto& sp : other.m_regions) {
         m_regions.insert(make_shared<Region>(*sp));
     }

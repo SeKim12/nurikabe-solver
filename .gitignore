@@ -4,3 +4,5 @@ data/
 __pycache__/
 
 !data/*.py
+tmp/
+.DS_Store
