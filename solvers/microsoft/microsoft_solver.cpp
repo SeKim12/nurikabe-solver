@@ -262,9 +262,8 @@ int main(int argc, char *argv[]) {
         int h = stoi(argv[2 + (4 * i) + 2]);
 
         // num cells, newline per row
-        int numChars = h*w + 9;
-        char *puzzleStr = new char[numChars]; 
-
+        int numChars = strlen(argv[2 + (4 * i) + 3]);// h*w + 9;
+        char *puzzleStr = new char[numChars + 1]; 
         for (int j = 0; j < numChars; j++) {
             char ch = *(argv[2 + (4 * i) + 3] + j);
             if (ch == '*') {
@@ -273,6 +272,10 @@ int main(int argc, char *argv[]) {
                 puzzleStr[j] = ch;
             }
         }
+        puzzleStr[numChars] = '\0';
+
+        cout << puzzleName << endl;
+        cout << puzzleStr << endl;
 
         puzzles[i] = 
         {
@@ -544,16 +547,20 @@ Grid::Grid(const int width, const int height, const string& s, const string &nam
         } else if (m[3].matched) {
             // Do nothing.
         } else {
-            throw runtime_error("RUNTIME ERROR: Grid::Grid() - "
-                "s must contain only digits, spaces, and newlines.");
+            string error = "RUNTIME ERROR: Grid::Grid() - "
+                "s must contain only digits, spaces, and newlines."; 
+            error = error + name;
+            throw runtime_error(error.c_str());
         }
     }
 
     // Validate the number of cells. Note that we can't do this before
     // parsing, because numbers 10 and above occupy multiple characters.
     if (v.size() != static_cast<size_t>(width * height)) {  
-        throw runtime_error("RUNTIME ERROR: Grid::Grid() - "
-            "s must contain width * height numbers and spaces.");
+          string error = "RUNTIME ERROR: Grid::Grid() - "
+                "s must contain only digits, spaces, and newlines. "; 
+            error = error + name;
+        throw runtime_error(error.c_str());
     }
 
     for (int x = 0; x < width; ++x) {
