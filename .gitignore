@@ -7,3 +7,8 @@ __pycache__/
 tmp/
 .DS_Store
 **/microsoft_solver
+
+ckpt.pt
+eval_losses.npy
+viz_losses.ipynb
+train_losses.npy

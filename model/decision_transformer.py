@@ -1,67 +1,175 @@
-from dataclasses import dataclass
+"""
+The MIT License (MIT) Copyright (c) 2020 Andrej Karpathy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+
+"""
+GPT model:
+- the initial stem consists of a combination of token encoding and a positional encoding
+- the meat of it is a uniform sequence of Transformer blocks
+    - each Transformer is a sequential combination of a 1-hidden-layer MLP block and a self-attention block
+    - all blocks feed into a central residual pathway similar to resnets
+- the final decoder is a linear projection into a vanilla Softmax classifier
+"""
+
+import math
+import logging
+
 import torch
-from torch import nn 
-import torch.nn.functional as F
- 
-from model.nanogpt import GPT, Block
+import torch.nn as nn
+from torch.nn import functional as F
 
-@dataclass
-class NurikabeDTConfigs:
-    # original GPT configs
-    # these depend on what pretrained backbone we're using
-    block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+logger = logging.getLogger(__name__)
 
-    # original DT configs
-    max_timestep: int = 1
-    model_type: str = 'reward_conditioned'
-    embd_pdrop: float = 1.
+import numpy as np
 
-    # added configs
-    max_island_size: int = 1
-    max_world_size: int = 1
+class GELU(nn.Module):
+    def forward(self, input):
+        return F.gelu(input)
 
+class GPTConfig:
+    """ base GPT config, params common to all GPT versions """
+    embd_pdrop = 0.1
+    resid_pdrop = 0.1
+    attn_pdrop = 0.1
 
-class NurikabeDT(nn.Module):
-    def __init__(self, config: NurikabeDTConfigs):
+    def __init__(self, vocab_size, block_size, **kwargs):
+        self.vocab_size = vocab_size
+        self.block_size = block_size
+        for k,v in kwargs.items():
+            setattr(self, k, v)
+
+class GPT1Config(GPTConfig):
+    """ GPT-1 like network roughly 125M params """
+    n_layer = 12
+    n_head = 12
+    n_embd = 768
+
+class CausalSelfAttention(nn.Module):
+    """
+    A vanilla multi-head masked self-attention layer with a projection at the end.
+    It is possible to use torch.nn.MultiheadAttention here but I am including an
+    explicit implementation here to show that there is nothing too scary here.
+    """
+
+    def __init__(self, config):
         super().__init__()
+        assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads
+        self.key = nn.Linear(config.n_embd, config.n_embd)
+        self.query = nn.Linear(config.n_embd, config.n_embd)
+        self.value = nn.Linear(config.n_embd, config.n_embd)
+        # regularization
+        self.attn_drop = nn.Dropout(config.attn_pdrop)
+        self.resid_drop = nn.Dropout(config.resid_pdrop)
+        # output projection
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        # self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size))
+        #                              .view(1, 1, config.block_size, config.block_size))
+        self.register_buffer("mask", torch.tril(torch.ones(config.block_size + 1, config.block_size + 1))
+                                     .view(1, 1, config.block_size + 1, config.block_size + 1))
+        self.n_head = config.n_head
+
+    def forward(self, x, layer_past=None):
+        B, T, C = x.size()
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_drop(self.proj(y))
+        return y
+
+class Block(nn.Module):
+    """ an unassuming Transformer block """
+
+    def __init__(self, config):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.mlp = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            GELU(),
+            nn.Linear(4 * config.n_embd, config.n_embd),
+            nn.Dropout(config.resid_pdrop),
+        )
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        return x
+
+class GPT(nn.Module):
+    """  the full GPT language model, with a context size of block_size """
+
+    def __init__(self, config):
+        super().__init__()
+
+        self.config = config
 
         self.model_type = config.model_type
 
-        # this is the only thing we need to copy from GPT checkpoint
-        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
-
+        # TODO: slightly confused about the dimensions
+        # I think the +1s here are for reward conditioning at the beginning, but not too sure
+        
+        # input embedding stem
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
+        # self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size + 1, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep+1, config.n_embd))
         self.drop = nn.Dropout(config.embd_pdrop)
 
+        # transformer
+        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.block_size = config.block_size
 
+        self.block_size = config.block_size
         self.apply(self._init_weights)
 
-        # ADDED encoders
-        # ORIGINAL included the Tanh
-        self.state_encoder = nn.Embedding(config.max_island_size + 4, config.n_embd)
-        self.state_encoder = nn.Sequential(self.state_encoder, nn.Tanh())
 
-        self.state_pos_emb = nn.Embedding(config.max_world_size ** 2, config.n_embd)
-        self.state_pos_emb = nn.Sequential(self.state_pos_emb, nn.Tanh())
+        logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
-        # embedding for each of (cell_loc, {-1, 0}) action
-        self.action_embeddings = nn.Embedding((config.max_world_size**2)*2, config.n_embd)
-        self.action_embeddings = nn.Sequential(self.action_embeddings, nn.Tanh())
 
-        # ORIGINAL
-        nn.init.normal_(self.action_embeddings[0].weight, mean=0.0, std=0.02)
+        # self.state_encoder = nn.Sequential(nn.Conv2d(4, 32, 8, stride=4, padding=0), nn.ReLU(),
+        #                          nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
+        #                          nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU(),
+        #                          nn.Flatten(), nn.Linear(3136, config.n_embd), nn.Tanh())
+
+        # TODO: instead of using a convnet, given that our grid is pretty tiny
+        # just flatten and do a FC layer
+        self.state_encoder = nn.Sequential(
+            nn.Linear(81, config.n_embd), 
+            nn.ReLU(), 
+            nn.Linear(config.n_embd, config.n_embd),
+            nn.Tanh()
+        )
 
         self.ret_emb = nn.Sequential(nn.Linear(1, config.n_embd), nn.Tanh())
+
+        self.action_embeddings = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd), nn.Tanh())
+        nn.init.normal_(self.action_embeddings[0].weight, mean=0.0, std=0.02)
+
+    def get_block_size(self):
+        return self.block_size
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -71,7 +179,7 @@ class NurikabeDT(nn.Module):
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
-    
+
     def configure_optimizers(self, train_config):
         """
         This long function is unfortunately doing something very simple and is being very defensive:
@@ -120,7 +228,7 @@ class NurikabeDT(nn.Module):
         optimizer = torch.optim.AdamW(optim_groups, lr=train_config.learning_rate, betas=train_config.betas)
         return optimizer
 
-        # state, action, and return
+    # state, action, and return
     def forward(self, states, actions, targets=None, rtgs=None, timesteps=None):
         # states: (batch, block_size, 4*84*84)
         # actions: (batch, block_size, 1)
@@ -128,11 +236,13 @@ class NurikabeDT(nn.Module):
         # rtgs: (batch, block_size, 1)
         # timesteps: (batch, 1, 1)
 
-        state_embeddings = self.state_encoder(states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()) # (batch * block_size, n_embd)
-        state_embeddings = state_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd) # (batch, block_size, n_embd)
+        state_embeddings = self.state_encoder(states.reshape(-1, states.size(-2) * states.size(-1)))
+        state_embeddings = state_embeddings.reshape(states.size(0), states.size(1), -1)
+        # state_embeddings = self.state_encoder(states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()) # (batch * block_size, n_embd)
+        # state_embeddings = state_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd) # (batch, block_size, n_embd)
         
         if actions is not None and self.model_type == 'reward_conditioned': 
-            rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
+            rtg_embeddings = self.ret_emb(rtgs)
             action_embeddings = self.action_embeddings(actions.type(torch.long).squeeze(-1)) # (batch, block_size, n_embd)
 
             token_embeddings = torch.zeros((states.shape[0], states.shape[1]*3 - int(targets is None), self.config.n_embd), dtype=torch.float32, device=state_embeddings.device)
@@ -158,7 +268,6 @@ class NurikabeDT(nn.Module):
 
         batch_size = states.shape[0]
         all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
-
         position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
 
         x = self.drop(token_embeddings + position_embeddings)
@@ -183,19 +292,3 @@ class NurikabeDT(nn.Module):
             loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
 
         return logits, loss
-
-    def get_num_params(self):
-        return sum(p.numel() for p in self.parameters())
-    
-    @classmethod
-    def from_pretrained_gpt2(cls, config, gpt_model):
-        model = NurikabeDT(config)
-        sd = model.state_dict()
-        gpt_sd = GPT.from_pretrained(gpt_model).state_dict()
-        for k in sd:
-            if 'blocks' not in k:
-                continue
-            pn = 'transformer.h.' + '.'.join(k.split('.')[1:])
-            sd[k].copy_(gpt_sd[pn])
-        
-        return model

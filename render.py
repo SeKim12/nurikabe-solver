@@ -3,6 +3,7 @@ import os
 import argparse
 import zipfile 
 import tempfile
+import gc
 
 from moviepy.video.VideoClip import DataVideoClip
 from moviepy.video.io.bindings import mplfig_to_npimage
@@ -28,9 +29,9 @@ def load_trajectory(path_to_csv):
 def data_to_frame(board):
     normalized = np.copy(board).astype(float)
     normalized[board > 0] = 1
-    normalized[board == -3] = 0.5
-    normalized[board == -2] = 1
+    normalized[board == -2] = 0.5
     normalized[board == -1] = 0
+    normalized[board == 0] = 1
     
     map = plt.imshow(normalized, cmap='gray')
 
@@ -49,6 +50,8 @@ def render_trajectory(path_to_csv, save_dir='data'):
     arr = load_trajectory(path_to_csv)
     clip = DataVideoClip(arr, data_to_frame, fps=5)
     clip.write_videofile(os.path.join(save_dir, f'{vidname}.mp4'))
+    clip.close()
+    gc.collect()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

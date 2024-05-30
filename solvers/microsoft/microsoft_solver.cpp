@@ -34,7 +34,7 @@ using namespace std::chrono;
 
 class Grid {
 public:
-    Grid(int width, int height, const string& s, const string& name);
+    Grid(int width, int height, const string& s, const string& name, const string& save_dir);
 
     enum SitRep {
         CONTRADICTION_FOUND,
@@ -54,8 +54,8 @@ private:
     // The states that a cell can be in. Numbered cells are positive,
     // which is why this has an explicitly specified underlying type.
     enum State : int {
-        UNKNOWN = -3,
-        WHITE = -2,
+        UNKNOWN = -2,
+        WHITE = 0,
         BLACK = -1
     };
 
@@ -220,6 +220,9 @@ private:
 
     // const string puzzle_name;
     const string name;
+    bool record_state;
+    const string save_dir; 
+
     vector<int> flat_grid_running;
     void flush_state();
     void start_trajectory(int w, int h);
@@ -250,22 +253,24 @@ int main(int argc, char *argv[]) {
         const char * s;
     };
 
-    int numPuzzles = stoi(argv[1]);
-
+    char *save_dir = argv[1];
+    int numPuzzles = stoi(argv[2]);
+    int num_meta_args = 3; 
+    
     printf("Solving %d puzzles...\n", numPuzzles);
 
     Puzzle *puzzles = new Puzzle[numPuzzles]; 
 
     for (int i = 0; i < numPuzzles; i++) {
-        char *puzzleName = argv[2 + (4 * i)];
-        int w = stoi(argv[2 + (4 * i) + 1]); 
-        int h = stoi(argv[2 + (4 * i) + 2]);
+        char *puzzleName = argv[num_meta_args + (4 * i)];
+        int w = stoi(argv[num_meta_args + (4 * i) + 1]); 
+        int h = stoi(argv[num_meta_args + (4 * i) + 2]);
 
         // num cells, newline per row
-        int numChars = strlen(argv[2 + (4 * i) + 3]);// h*w + 9;
+        int numChars = strlen(argv[num_meta_args + (4 * i) + 3]);// h*w + 9;
         char *puzzleStr = new char[numChars + 1]; 
         for (int j = 0; j < numChars; j++) {
-            char ch = *(argv[2 + (4 * i) + 3] + j);
+            char ch = *(argv[num_meta_args + (4 * i) + 3] + j);
             if (ch == '*') {
                 puzzleStr[j] = '\n';
             } else {
@@ -274,8 +279,8 @@ int main(int argc, char *argv[]) {
         }
         puzzleStr[numChars] = '\0';
 
-        cout << puzzleName << endl;
-        cout << puzzleStr << endl;
+        // cout << puzzleName << endl;
+        // cout << puzzleStr << endl;
 
         puzzles[i] = 
         {
@@ -486,13 +491,15 @@ int main(int argc, char *argv[]) {
             Puzzle puzzle = puzzles[i];
             const auto start = steady_clock::now();
 
-            Grid g(puzzle.w, puzzle.h, puzzle.s, puzzle.name);
+            Grid g(puzzle.w, puzzle.h, puzzle.s, puzzle.name, save_dir);
 
-            while (g.solve() == Grid::KEEP_GOING) { }
+            int max_iter = 50;
+            int cur_iter = 0;
+
+            while (g.solve() == Grid::KEEP_GOING && cur_iter++ < max_iter) { }
             const auto finish = steady_clock::now();
 
-            string fname = "tmp/";
-            ofstream f(fname + puzzle.name + string(".html"));
+            ofstream f(string(save_dir) + puzzle.name + string(".html"));
 
             g.write(f, start, finish);
 
@@ -515,9 +522,9 @@ int main(int argc, char *argv[]) {
     }
 }
 
-Grid::Grid(const int width, const int height, const string& s, const string &name)
+Grid::Grid(const int width, const int height, const string& s, const string &name, const string &save_dir)
     : m_width(width), m_height(height), m_total_black(width * height),
-    m_cells(), m_regions(), m_sitrep(KEEP_GOING), m_output(), m_prng(1729), name(name), flat_grid_running(width * height, 0) {
+    m_cells(), m_regions(), m_sitrep(KEEP_GOING), m_output(), m_prng(1729), name(name), flat_grid_running(width * height, 0), record_state(true), save_dir(save_dir) {
 
     // Validate width and height.
     if (width < 1) {
@@ -1121,7 +1128,9 @@ void Grid::print(const string& s, const set<pair<int, int>>& updated,
 }
 
 void Grid::flush_state() {
-    string file_name = "tmp/" + name + ".csv";
+    if (!record_state) return;
+
+    string file_name = save_dir + name + ".csv";
     ofstream outfile(file_name.c_str(), ios::app);
 
     if (outfile.is_open()) {
@@ -1137,7 +1146,7 @@ void Grid::flush_state() {
 }
 
 void Grid::start_trajectory(int w, int h) {
-    string file_name = "tmp/" + name + ".csv";
+    string file_name = save_dir + name + ".csv";
     ofstream outfile(file_name.c_str(), ios::trunc);
 
     if (outfile.is_open()) {
@@ -1153,7 +1162,7 @@ void Grid::start_trajectory(int w, int h) {
 }
 
 void Grid::end_trajectory(const int known, const string& time_repr) {
-    string file_name = "tmp/" + name + ".csv";
+    string file_name = save_dir + name + ".csv";
     ofstream outfile(file_name.c_str(), ios::app);
     outfile << known << "," << time_repr << endl;
     return;
@@ -1669,7 +1678,9 @@ Grid::Grid(const Grid& other)
     m_sitrep(other.m_sitrep),
     m_output(), // Intentionally not copied to increase performance. This copy ctor is private.
     m_prng(other.m_prng),
-    name(other.name) {
+    name(other.name),
+    save_dir(other.save_dir),
+    record_state(false) {
 
     flat_grid_running = other.flat_grid_running;
     
