@@ -128,7 +128,7 @@ class GPT(nn.Module):
 
         # TODO: slightly confused about the dimensions
         # I think the +1s here are for reward conditioning at the beginning, but not too sure
-        
+
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
         # self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
@@ -159,7 +159,9 @@ class GPT(nn.Module):
         self.state_encoder = nn.Sequential(
             nn.Linear(81, config.n_embd), 
             nn.ReLU(), 
-            nn.Linear(config.n_embd, config.n_embd),
+            nn.Linear(config.n_embd, 4*config.n_embd),
+            nn.ReLU(), 
+            nn.Linear(4*config.n_embd, config.n_embd),
             nn.Tanh()
         )
 
@@ -240,8 +242,7 @@ class GPT(nn.Module):
         state_embeddings = state_embeddings.reshape(states.size(0), states.size(1), -1)
         # state_embeddings = self.state_encoder(states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()) # (batch * block_size, n_embd)
         # state_embeddings = state_embeddings.reshape(states.shape[0], states.shape[1], self.config.n_embd) # (batch, block_size, n_embd)
-        
-        if actions is not None and self.model_type == 'reward_conditioned': 
+        if actions is not None and self.model_type == 'reward_conditioned':
             rtg_embeddings = self.ret_emb(rtgs)
             action_embeddings = self.action_embeddings(actions.type(torch.long).squeeze(-1)) # (batch, block_size, n_embd)
 

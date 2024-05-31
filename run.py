@@ -4,12 +4,17 @@ Very quick and dirty way to test the training flow. Need to set up proper traini
 import torch 
 import numpy as np
 from tqdm import tqdm
+from datetime import datetime
+import os 
 
 from torch.utils.data import DataLoader
 from model import decision_transformer
 from data import nurikabe_dataset, constants
 
 if __name__ == '__main__':
+
+    logdir = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+    os.makedirs(logdir, exist_ok=True)
 
     class TrainerConfig:
         # optimization parameters
@@ -32,11 +37,11 @@ if __name__ == '__main__':
                 setattr(self, k, v)
     
     # this is K in paper
-    max_seq_len = 70
+    max_seq_len = 30
     # this is how long an episode can be in general
     # the way I understood it was that an episode can be max_timesteps long 
     # and we sample a sequence of size K from an episode. I could be completely wrong on this though
-    max_timesteps = 300
+    max_timesteps = 81
 
     # probably just need to fix this
     model_type = 'reward_conditioned'
@@ -109,9 +114,9 @@ if __name__ == '__main__':
 
         eval_losses_per_epoch.append(np.mean(eval_losses))
 
-        np.save('eval_losses.npy', np.array(eval_losses_per_epoch))
-        np.save('train_losses.npy', np.array(train_losses))
+        np.save(os.path.join(logdir, 'eval_losses.npy'), np.array(eval_losses_per_epoch))
+        np.save(os.path.join(logdir, 'train_losses.npy'), np.array(train_losses))
 
         if eval_losses_per_epoch[-1] < best_val_loss:
-            torch.save(model, f'ckpt.pt')
+            torch.save(model.state_dict(), os.path.join(logdir, 'ckpt.pt'))
             best_val_loss = eval_losses_per_epoch[-1]

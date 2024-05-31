@@ -59,6 +59,10 @@ class NurikabeDataset(data.Dataset):
         self.soln_files = sorted(self.soln_files)
         
         print(f'Found {len(self.traj_files)} Trajectories')
+        self.seq_lens = self.get_all_seq_lens()
+    
+    def get_all_seq_lens(self):
+        return [self.__getitem__(i, get_seq_len=True) for i in range(len(self))]
 
     def load_trajectory(self, index):
         states = load_csv_trajectory(self.traj_files[index])
@@ -105,10 +109,12 @@ class NurikabeDataset(data.Dataset):
     def __len__(self):
         return len(self.traj_files)
     
-    def __getitem__(self, index):
+    def __getitem__(self, index, get_seq_len=False):
         states, actions, rtgs = self.load_trajectory(index)
 
         T, H, W = states.shape
+        if get_seq_len:
+            return T
 
         # from trajectory, sample max_seq_len trajectory
         # if trajectory < max_seq_len, take entire trajectory and pad 
