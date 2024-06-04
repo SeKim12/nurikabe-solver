@@ -32,6 +32,8 @@
 using namespace std;
 using namespace std::chrono;
 
+vector<int> order(5); 
+
 class Grid {
 public:
     Grid(int width, int height, const string& s, const string& name, const string& save_dir);
@@ -148,14 +150,14 @@ private:
 
     typedef map<shared_ptr<Region>, set<pair<int, int>>> cache_map_t;
 
-    bool analyze_complete_islands(bool verbose);
-    bool analyze_single_liberties(bool verbose);
-    bool analyze_dual_liberties(bool verbose);
-    bool analyze_unreachable_cells(bool verbose);
-    bool analyze_potential_pools(bool verbose);
+    bool analyze_complete_islands(bool verbose, cache_map_t& _unused);
+    bool analyze_single_liberties(bool verbose, cache_map_t& _unused);
+    bool analyze_dual_liberties(bool verbose, cache_map_t& _unused);
+    bool analyze_unreachable_cells(bool verbose, cache_map_t& _unused);
+    bool analyze_potential_pools(bool verbose, cache_map_t& _unused);
     bool analyze_confinement(bool verbose, cache_map_t& cache);
     vector<pair<int, int>> guessing_order();
-    bool analyze_hypotheticals(bool verbose);
+    bool analyze_hypotheticals(bool verbose, cache_map_t& _unused);
 
     // We use an upper-left origin.
     // This is convenient during construction and printing.
@@ -253,11 +255,16 @@ int main(int argc, char *argv[]) {
         const char * s;
     };
 
-    char *save_dir = argv[1];
-    int numPuzzles = stoi(argv[2]);
-    int num_meta_args = 3; 
+    // define order
+    for (int i = 0; i < 5; i++) {
+        order[i] = stoi(argv[i + 1]); 
+    }
+
+    char *save_dir = argv[6];
+    int numPuzzles = stoi(argv[7]);
+    int num_meta_args = 8; 
     
-    printf("Solving %d puzzles...\n", numPuzzles);
+    // printf("Solving %d puzzles...\n", numPuzzles);
 
     Puzzle *puzzles = new Puzzle[numPuzzles]; 
 
@@ -503,7 +510,7 @@ int main(int argc, char *argv[]) {
 
             g.write(f, start, finish);
 
-            cout << puzzle.name << ": " << format_time(start, finish) << ", ";
+            // cout << puzzle.name << ": " << format_time(start, finish) << ", ";
 
             const int k = g.known();
 
@@ -511,7 +518,7 @@ int main(int argc, char *argv[]) {
 
             const int cells = puzzle.w * puzzle.h;
 
-            cout << k << "/" << cells << " (" << k * 100.0 / cells << "%) solved" << endl;
+            // cout << k << "/" << cells << " (" << k * 100.0 / cells << "%) solved" << endl;
         }
     } catch (const exception& e) {
         cerr << "EXCEPTION CAUGHT! \"" << e.what() << "\"" << endl;
@@ -638,17 +645,41 @@ Grid::SitRep Grid::solve(const bool verbose, const bool guessing) {
     // or mark an already known cell, they bail out early.
     // * analyze_confinement() can still assume that it has a cache.
 
-    if (analyze_complete_islands(verbose)
-        || analyze_single_liberties(verbose)
-        || analyze_dual_liberties(verbose)
-        || analyze_unreachable_cells(verbose)
-        || analyze_potential_pools(verbose)
-        || detect_contradictions(verbose, cache)
-        || analyze_confinement(verbose, cache)
-        || (guessing && analyze_hypotheticals(verbose))) {
-        
-        return m_sitrep;
+    typedef bool (Grid::*test_fn)(bool, cache_map_t& cache);
+
+    test_fn *analysis_functions = new test_fn[7]; 
+
+    analysis_functions[0] = &Grid::analyze_complete_islands;
+    analysis_functions[1] = &Grid::analyze_single_liberties;
+    analysis_functions[2] = &Grid::analyze_dual_liberties; 
+    analysis_functions[3] = &Grid::analyze_unreachable_cells; 
+    analysis_functions[4] = &Grid::analyze_potential_pools; 
+
+    for (int i = 0; i < 5; i++) {
+        if ((this->*(analysis_functions[order[i]]))(verbose, cache)) {
+            return m_sitrep; 
+        }
     }
+
+    /* these checks are fixed, mainly b/c I don't want to break anything haha*/
+    if (detect_contradictions(verbose, cache)
+        || analyze_confinement(verbose, cache)
+        || (guessing && analyze_hypotheticals(verbose, cache))) {
+ 
+            return  m_sitrep; 
+    }
+
+    // if (analyze_complete_islands(verbose, cache)
+    //     || analyze_single_liberties(verbose, cache)
+    //     || analyze_dual_liberties(verbose, cache)
+    //     || analyze_unreachable_cells(verbose, cache)
+    //     || analyze_potential_pools(verbose, cache)
+    //     || detect_contradictions(verbose, cache)
+    //     || analyze_confinement(verbose, cache)
+    //     || (guessing && analyze_hypotheticals(verbose, cache))) {
+        
+    //     return m_sitrep;
+    // }
 
 
     if (verbose) {
@@ -659,7 +690,9 @@ Grid::SitRep Grid::solve(const bool verbose, const bool guessing) {
 }
 
 // Look for complete islands.
-bool Grid::analyze_complete_islands(const bool verbose) {
+bool Grid::analyze_complete_islands(const bool verbose, cache_map_t& _unused) {
+    (void)_unused; 
+
     set<pair<int, int>> mark_as_black;
     set<pair<int, int>> mark_as_white;
 
@@ -675,7 +708,9 @@ bool Grid::analyze_complete_islands(const bool verbose) {
 }
 
 // Look for partial regions that can expand into only one cell. They must expand.
-bool Grid::analyze_single_liberties(const bool verbose) {
+bool Grid::analyze_single_liberties(const bool verbose, cache_map_t& _unused) {
+    (void)_unused; 
+
     set<pair<int, int>> mark_as_black;
     set<pair<int, int>> mark_as_white;
 
@@ -701,7 +736,9 @@ bool Grid::analyze_single_liberties(const bool verbose) {
 }
 
 // Look for N - 1 islands with exactly two diagonal liberties.
-bool Grid::analyze_dual_liberties(const bool verbose) {
+bool Grid::analyze_dual_liberties(const bool verbose, cache_map_t& _unused) {
+    (void)_unused; 
+
     set<pair<int, int>> mark_as_black;
     set<pair<int, int>> mark_as_white;
 
@@ -744,7 +781,9 @@ bool Grid::analyze_dual_liberties(const bool verbose) {
 // This supersedes complete island analysis and forbidden bridge analysis.
 // (We run complete island analysis above because it's fast
 // and it makes the output easier to understand.)
-bool Grid::analyze_unreachable_cells(const bool verbose) {
+bool Grid::analyze_unreachable_cells(const bool verbose, cache_map_t& _unused) {
+    (void)_unused; 
+
     set<pair<int, int>> mark_as_black;
     set<pair<int, int>> mark_as_white;
 
@@ -760,7 +799,9 @@ bool Grid::analyze_unreachable_cells(const bool verbose) {
 }
 
 // Look for squares of one unknown and three black cells, or two unknown and two black cells.
-bool Grid::analyze_potential_pools(const bool verbose) {
+bool Grid::analyze_potential_pools(const bool verbose, cache_map_t& _unused) {
+    (void)_unused; 
+
     set<pair<int, int>> mark_as_black;
     set<pair<int, int>> mark_as_white;
 
@@ -951,7 +992,9 @@ vector<pair<int, int>> Grid::guessing_order() {
     return ret;
 }
 
-bool Grid::analyze_hypotheticals(const bool verbose) {
+bool Grid::analyze_hypotheticals(const bool verbose, cache_map_t& _unused) {
+    (void)_unused; 
+
     set<pair<int, int>> mark_as_black;
     set<pair<int, int>> mark_as_white;
 

@@ -12,3 +12,12 @@ ckpt.pt
 eval_losses.npy
 viz_losses.ipynb
 train_losses.npy
+randomized
+trajectory_htmls
+[0-9]*/
+dt_online_results/
+augment_trajectory.ipynb
+augment_trajectory.py
+avg_rtg.png
+cmp_trajectories.ipynb
+resolve_data.py

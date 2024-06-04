@@ -23,8 +23,11 @@ class NurikabeEnv:
             (self.solution == 0) | (self.solution == -1),
             -2, self.solution
         )
-        return self.board.flatten(), self.get_state_index()
+        return self.board.flatten(), self.get_optimal_rtgs(), self.get_state_index()
     
+    def get_optimal_rtgs(self):
+        return np.count_nonzero(self.solution <= 0)
+
     def get_state_index(self):
         flat_board = self.board.flatten()
         unoccupied_indices = np.where(flat_board == -2)[0]
@@ -134,9 +137,9 @@ def q_learning(env, num_episodes=1000, alpha=0.1, gamma=0.99, epsilon=0.1):
     return q_table
 
 
-env = NurikabeEnv(9, 9, '../data/nurikabe.npz')
-q_table = q_learning(env)
+# env = NurikabeEnv(9, 9, '../data/nurikabe.npz')
+# q_table = q_learning(env)
 
-print("Trained Q-table:")
-print(q_table)
+# print("Trained Q-table:")
+# print(q_table)
 
