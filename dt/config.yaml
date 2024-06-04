@@ -1,0 +1,6 @@
+train_configs:
+  - max_epochs: 100
+  - batch_size: 128
+  - learning_rate: 3e-4
+model_configs:
+  - vocab_size:
