@@ -126,9 +126,6 @@ class GPT(nn.Module):
 
         self.model_type = config.model_type
 
-        # TODO: slightly confused about the dimensions
-        # I think the +1s here are for reward conditioning at the beginning, but not too sure
-
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
         # self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
@@ -159,9 +156,7 @@ class GPT(nn.Module):
         self.state_encoder = nn.Sequential(
             nn.Linear(81, config.n_embd), 
             nn.ReLU(), 
-            nn.Linear(config.n_embd, 4*config.n_embd),
-            nn.ReLU(), 
-            nn.Linear(4*config.n_embd, config.n_embd),
+            nn.Linear(config.n_embd, config.n_embd),
             nn.Tanh()
         )
 
@@ -276,6 +271,7 @@ class GPT(nn.Module):
         x = self.ln_f(x)
         logits = self.head(x)
 
+        breakpoint()
         if actions is not None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1::3, :] # only keep predictions from state_embeddings
         elif actions is None and self.model_type == 'reward_conditioned':

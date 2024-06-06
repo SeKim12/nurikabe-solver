@@ -1,45 +1,44 @@
 import numpy as np
-import random
-from typing import List
 import numpy as np
-
-import gym
-from gym import spaces
-
-from dt import constants
+from dt import dataset
 
 class NurikabeEnv:
-    def __init__(self, h, w, solution_files):
-        self.h, self.w = h, w
-        self.solution_files = solution_files
+    def __init__(self, 
+                 nds: dataset.NurikabeDataset, 
+                 num_worlds=-1,
+                 shuffle=False):
+        
+        self.nds = nds
         self.board_index = 0
+        self.num_worlds = num_worlds
+        self.envs = nds.get_env_files(num_worlds, shuffle)
 
-    def reset(self):    
-        self.solution = np.load(self.solution_files[self.board_index])
-
+    def reset(self):   
+        self.solution = np.load(self.envs[self.board_index])
         self.board = np.where(
             (self.solution == 0) | (self.solution == -1),
             -2, self.solution
         )
-
         self.board_index += 1
-
-        return np.copy(self.board), self.get_optimal_rtg()
+        return np.copy(self.board), self.get_optimal_rtg(self.solution)
     
-    def step(self, action, position):
-        i, j = position // self.h, position % self.w
-        current_val = self.board[i, j]
-
-        if current_val >= 1:  # Already-numbered cell
-            reward = constants.NUM_CELL_RWD  # Heavy penalty
-            done = False
-            return np.copy(self.board), reward, done
+    def step(self, action_y, action_x, action):
+        sp = np.copy(self.board) 
+        sp[action_y, action_x] = action 
         
-        prev_score = np.count_nonzero(self.solution == self.board)
-        self.board[i, j] = action 
-        cur_score = np.count_nonzero(self.solution == self.board) 
+        if np.all(sp == self.board):
+            return self.board, 0, False 
+        
+        # get reward
+        rewards, terminated = self.nds.load_trajectory(
+            np.stack((self.board, sp)),
+            self.solution
+        )[-2:]
 
-        return np.copy(self.board), cur_score - prev_score, cur_score == self.h * self.w
+        assert rewards.size == 1 
+
+        self.board = sp
+        return np.copy(self.board), rewards[0], terminated
     
-    def get_optimal_rtg(self):
-        return np.count_nonzero(self.board <= 0)
+    def get_optimal_rtg(self, board):
+        return self.nds.get_optimal_rtg(board)

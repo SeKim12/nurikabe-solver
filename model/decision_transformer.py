@@ -159,9 +159,7 @@ class GPT(nn.Module):
         self.state_encoder = nn.Sequential(
             nn.Linear(81, config.n_embd), 
             nn.ReLU(), 
-            nn.Linear(config.n_embd, 4*config.n_embd),
-            nn.ReLU(), 
-            nn.Linear(4*config.n_embd, config.n_embd),
+            nn.Linear(config.n_embd, config.n_embd),
             nn.Tanh()
         )
 
@@ -276,6 +274,7 @@ class GPT(nn.Module):
         x = self.ln_f(x)
         logits = self.head(x)
 
+        breakpoint()
         if actions is not None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1::3, :] # only keep predictions from state_embeddings
         elif actions is None and self.model_type == 'reward_conditioned':

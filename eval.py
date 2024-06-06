@@ -62,7 +62,7 @@ def convert_action(action):
     a_y = action // 27
     a_x = (action - a_y * 27) // 3
     a = action - a_y * 27 - a_x * 3
-    return a_y * 9 + a_x, -a
+    return a_y, a_x, -a
 
 def run_model(model, loader, eval_iters, max_steps_in_env, results_dir=None):
     world = env.NurikabeEnv(9, 9, lazy=True)
@@ -148,18 +148,18 @@ if __name__ == '__main__':
     eval_results_dir = 'dt_online_results'
     os.makedirs(eval_results_dir, exist_ok=True)
 
-    max_seq_len = 30
+    max_seq_len = 50
     max_timesteps = 200
-    val_dataset = dataset.NurikabeDataset('data/logicgamesonline_trajectories_val_expert720K', max_seq_len, 9, 9)
+    val_dataset = dataset.NurikabeDataset('data/logicgamesonline_trajectories_val_expert720K', False, True)
     mconf = dt_model.GPTConfig(9**2 * 3, max_seq_len * 3,
-                n_layer=6, n_head=8, n_embd=128, model_type='reward_conditioned', max_timestep=max_timesteps)
+                n_layer=3, n_head=8, n_embd=128, model_type='reward_conditioned', max_timestep=max_timesteps)
     model = dt_model.GPT(mconf)
-    model.load_state_dict(torch.load('2024_06_03_18_13_14/ckpt.pt')['model_state_dict'])
+    model.load_state_dict(torch.load('2024_06_04_17_46_06/ckpt.pt')['model_state_dict'])
     val_loader = DataLoader(val_dataset, shuffle=False,
                               batch_size=1,
                               num_workers=1)
     
-    run_model(model, val_loader, 30, 500, eval_results_dir)
+    run_model(model, val_loader, 20, 1000, eval_results_dir)
 
         
 
