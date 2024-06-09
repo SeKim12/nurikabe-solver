@@ -1,5 +1,5 @@
 *.npz
-data/
+# data/
 .vscode/*
 __pycache__/
 
@@ -21,3 +21,8 @@ augment_trajectory.py
 avg_rtg.png
 cmp_trajectories.ipynb
 resolve_data.py
+wandb/
+dt/logs/
+dt/wandb/
+dt/assets/
+archive_logs/

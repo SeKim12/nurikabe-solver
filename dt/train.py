@@ -1,228 +1,230 @@
-"""
-Very quick and dirty way to test the training flow. Need to set up proper training / eval pipeline
-"""
-import torch 
+import torch
 import numpy as np
 from tqdm import tqdm
+import sys
+import os
 from datetime import datetime
-import os 
 
-from dt import dt_model
-# from data import nurikabe_dataset, constants
+from data import nurikabe_dataset
+import dt_model, options, eval
 
-from dt import dataset, env2
-import eval
+wandb_logging = False
 
 eval.set_seed(1112)
 
-@torch.no_grad()
-def run_model_eval(model, soln_files, max_timesteps, device='mps:0', split='train', max_steps_in_env=1000): 
-    """
-    Run online evaluation on fixed number of val set worlds and save 
-    model evaluation results per world. 
-    """
-    model.eval()
+class TrainerConfig:
+    # optimization parameters
+    max_epochs = 500
+    batch_size = 128
+    learning_rate = 3e-4
+    betas = (0.9, 0.95)
+    grad_norm_clip = 1.0
+    weight_decay = 0.1  # only applied on matmul weights
+    # learning rate decay params: linear warmup followed by cosine decay to 10% of original
+    lr_decay = False
+    warmup_tokens = 375e6  # these two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
+    final_tokens = 260e9  # (at what point we reach 10% of original LR)
+    # checkpoint settings
+    ckpt_path = None
+    num_workers = 0  # for DataLoader
 
-    num_worlds = len(soln_files)
-    world = env2.NurikabeEnv(9, 9, soln_files)
-
-    metrics = {
-        'returns': [],  # rewards per world
-        'timesteps': [],
-        'solved': [], 
-        'worlds': soln_files
-    }
-
-    pbar = tqdm(range(num_worlds), total=num_worlds, desc=f'online_{split}')
-    for i in pbar:
-        ts = 0
-        is_done = False 
-
-        state, init_rtg = world.reset()
-
-        all_states = [state] 
-        all_actions = []
-        all_rtgs = [init_rtg] 
-
-        reward_sum = 0
-        while not is_done and ts < max_steps_in_env:
-            states = torch.tensor(np.array(all_states), dtype=torch.float32).unsqueeze(0).to(device) # B, T, H, W 
-            actions = None if len(all_actions) == 0 else torch.tensor(all_actions, dtype=torch.long).unsqueeze(0).unsqueeze(-1).to(device) # B, T, N_act
-            rtgs = torch.tensor(all_rtgs, dtype=torch.float).unsqueeze(0).unsqueeze(-1).to(device)  # B, T, N_rtg
-            timesteps = torch.tensor([min(ts, max_timesteps)], dtype=torch.int64).view((1,1,1)).to(device)
-
-            sampled_action = eval.sample(model, 
-                                         states, 
-                                         steps=1, 
-                                         temperature=1.0, 
-                                         sample=False, 
-                                         actions=actions, 
-                                         rtgs=rtgs,
-                                         timesteps=timesteps)
-            
-            position, action = eval.convert_action(sampled_action.item())
-
-            state, reward, is_done = world.step(action, position)
-
-            all_states.append(state)
-            all_rtgs.append(all_rtgs[-1] - reward)
-            all_actions.append(sampled_action.item())
-
-            reward_sum += reward
-            ts += 1
-
-        metrics['returns'].append(reward_sum)
-        metrics['timesteps'].append(ts + 1) 
-        metrics['solved'].append(is_done)
-
-        pbar.postfix = f'online_{split}_return={reward_sum:.3f}'
-    
-    model.train()
-    return metrics
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 
-if __name__ == '__main__':
+def get_model_config(**model_args):
+    return dt_model.GPTConfig(**model_args)
 
-    logdir = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
-    os.makedirs(logdir, exist_ok=True)
 
-    class TrainerConfig:
-        # optimization parameters
-        max_epochs = 500
-        batch_size = 128
-        learning_rate = 3e-4
-        betas = (0.9, 0.95)
-        grad_norm_clip = 1.0
-        weight_decay = 0.1 # only applied on matmul weights
-        # learning rate decay params: linear warmup followed by cosine decay to 10% of original
-        lr_decay = False
-        warmup_tokens = 375e6 # these two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
-        final_tokens = 260e9 # (at what point we reach 10% of original LR)
-        # checkpoint settings
-        ckpt_path = None
-        num_workers = 0 # for DataLoader
+def get_train_config(**kwargs):
+    return TrainerConfig(**kwargs)
 
-        def __init__(self, **kwargs):
-            for k,v in kwargs.items():
-                setattr(self, k, v)
-    
-    # probably just need to fix this
-    model_type = 'reward_conditioned'
-    mps_device = torch.device("mps:0")
-    
-    # cfgs
-    bs = 128
-    max_seq_len = 50
-    max_timesteps = 200
 
-    eval_every = 1
-    max_epochs = 100
-    lr = 1e-4
+def start_wandb(meta_args, cfg):
+    run = wandb.init(
+        entity="seungwoo-simon-kim",
+        project="nubes",
+        name=meta_args.exp_name,
+        config=cfg,
+    )
 
-    train_loader = dataset.get_loader('data/logicgamesonline_trajectories_train_expert720K', bs, max_seq_len)
-    val_loader = dataset.get_loader('data/logicgamesonline_trajectories_val_expert720K', bs, max_seq_len)
+    run.define_metric("iter")
+    run.define_metric("epoch")
 
-    # fix these 
-    online_worlds_train = train_loader.dataset.soln_files[:2400:120] 
-    online_worlds_eval = val_loader.dataset.soln_files[:2400:120]
-    
-    tconf = TrainerConfig(max_epochs=max_epochs, 
-                          batch_size=bs, 
-                          learning_rate=lr,
-                          lr_decay=False, 
-                          warmup_tokens=512*20,
-                          num_workers=4, 
-                          model_type='reward_conditioned', 
-                          max_timestep=max_timesteps)
+    run.define_metric("iter/train_loss", step_metric="iter")
 
-    mconf = dt_model.GPTConfig(9**2 * 3, 
-                               max_seq_len * 3,
-                               n_layer=3, 
-                               n_head=8, 
-                               n_embd=128, 
-                               model_type=model_type, 
-                               max_timestep=max_timesteps)
+    run.define_metric("epoch/train_loss", step_metric="epoch")
+    run.define_metric("epoch/val_loss", step_metric="epoch")
 
-    print(f'Train # trajectories: {len(train_loader.dataset)}\n'
-          f'Eval # trajectories: {len(val_loader.dataset)}\n'
-          f'max_seq_len: {max_seq_len}\n'
-          f'max_timesteps: {max_timesteps}\n')
-    
+    run.define_metric("epoch/online_val_num_correct", step_metric="epoch")
+    run.define_metric("epoch/online_train_num_correct", step_metric="epoch")
 
-    model = dt_model.GPT(mconf).to(mps_device)
+    run.define_metric("epoch/online_val", step_metric="epoch")
+    run.define_metric("epoch/online_train", step_metric="epoch")
+
+
+def train(model, optimizer, loader, device, itr):
+    pbar = tqdm(loader, total=len(loader), desc="train")
+    losses = []
+    for idx, data in enumerate(pbar):
+        states, actions, rtgs, timesteps = (x.to(device) for x in data)
+        target_actions = torch.clone(actions)
+
+        _, loss = model(states, actions, target_actions, rtgs, timesteps)
+
+        loss = loss.mean()
+        model.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        losses.append(loss.item())
+        pbar.postfix = f"loss={losses[-1]:.3f}"
+
+        if idx % 25 == 0 and wandb_logging:
+            wandb.log({"iter/train_loss": losses[-1], "iter": itr})
+
+        itr += 1
+
+    if wandb_logging:
+        wandb.log({"epoch/train_loss": np.mean(losses), "epoch": epoch})
+
+    return itr
+
+
+if __name__ == "__main__":
+    opt_cmd = options.parse_arguments(sys.argv[1:])
+    cfg = options.set(opt_cmd=opt_cmd, verbose=True)
+
+    meta_args = cfg.meta
+    train_args = cfg.train
+    model_args = cfg.model
+    data_args = cfg.data
+
+    log_dir = os.path.join(
+        "logs", meta_args.exp_name, datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    )
+    os.makedirs(log_dir, exist_ok=True)
+
+    if meta_args.get("wandb", False):
+        import wandb
+
+        start_wandb(meta_args, cfg)
+        wandb_logging = True
+
+    options.save_options_file(log_dir, cfg)
+
+    mconf = get_model_config(**model_args)
+    tconf = get_train_config(**train_args)
+    model = dt_model.GPT(mconf)
+
     optimizer = model.configure_optimizers(tconf)
+    if meta_args.get("ckpt"):
+        sd = torch.load(meta_args.ckpt, map_location="cpu")
+        model.load_state_dict(sd["model_state_dict"])
+        optimizer.load_state_dict(sd["optimizer_state_dict"])
 
-    best_val_loss = float('inf')
-    train_losses_per_epoch = []
+    device = torch.device(f'cuda:{meta_args.get("device", 0)}')
 
-    # poor man's train/val loop...
-    # for each epoch, even if we use the same trajectory
-    # we would be getting a different K-length sequence from that trajectory
-    for epoch in tqdm(range(tconf.max_epochs), desc='epoch'):
+    model = model.to(device)
 
-        pbar = tqdm(train_loader, total=len(train_loader), desc='train')
+    train_loader = nurikabe_dataset.get_loader(
+        data_dir=data_args.train_path,
+        batch_size=data_args.batch_size,
+        reward_type=model_args.reward_type,
+        fix_k=data_args.fix_k,
+        max_seq_len=model_args.max_seq_len,
+    )
 
-        # # this loss tracks how well the model is able to predict the next action
-        train_seq_pred_losses = []
+    val_loader = nurikabe_dataset.get_loader(
+        data_dir=data_args.val_path,
+        batch_size=data_args.batch_size,
+        reward_type=model_args.reward_type,
+        fix_k=data_args.fix_k,
+        max_seq_len=model_args.max_seq_len,
+    )
 
-        for x, y, r, t in pbar:
-            logits, loss = model(x.to(mps_device), y.to(mps_device), y.to(mps_device), r.to(mps_device), t.to(mps_device))
-            loss = loss.mean()
-            train_seq_pred_losses.append(loss.item())
+    itr = 0
+    for epoch in tqdm(range(tconf.max_epochs), desc="epoch"):
+        itr = train(model, optimizer, train_loader, device, itr)
 
-            model.zero_grad()
-            loss.backward()
-            optimizer.step()
+        eval_losses = eval.run_eval(model, val_loader, device)
 
-            pbar.postfix = f'train_seq_pred_loss={train_seq_pred_losses[-1]:.3f}'
+        if wandb_logging:
+            wandb.log({"epoch/val_loss": np.mean(eval_losses)})
 
-        train_losses_per_epoch.append(np.mean(train_seq_pred_losses))
-        np.save(os.path.join(logdir, 'train_losses.npy'), np.array(train_losses_per_epoch))
-        
-        if epoch % eval_every == 0: 
-            eval_dir = os.path.join(logdir, f'e{epoch:04d}')
-            os.makedirs(eval_dir, exist_ok=True) 
+        epoch_dir = os.path.join(log_dir, f"e{epoch:05d}")
+        os.makedirs(epoch_dir, exist_ok=True)
 
-            pbar = tqdm(val_loader, total=len(val_loader), desc='val')
+        val_online_metrics = eval.run_online(
+            model,
+            val_loader.dataset,
+            meta_args.online_n_worlds,
+            max_timestep=mconf.max_timestep,
+            device=device,
+            split="val",
+            max_steps_in_env=meta_args.online_max_steps_in_world,
+        )
 
-            # this tracks how well the model is able to predict the next action
-            eval_seq_pred_losses = []
-            for x, y, r, t in pbar:
-                logits, loss = model(x.to(mps_device), y.to(mps_device), y.to(mps_device), r.to(mps_device), t.to(mps_device))
-                loss = loss.mean()
-                eval_seq_pred_losses.append(loss.item())
-                pbar.postfix = f'eval_loss={eval_seq_pred_losses[-1]:.3f}'
+        train_online_metrics = eval.run_online(
+            model,
+            train_loader.dataset,
+            meta_args.online_n_worlds,
+            max_timestep=mconf.max_timestep,
+            device=device,
+            split="train",
+            max_steps_in_env=meta_args.online_max_steps_in_world,
+        )
 
-            # this tracks how well the model performs in an online setting
-            eval_online = run_model_eval(model, online_worlds_eval, max_timesteps, split='eval')
+        torch.save(
+            {
+                "val_online_metrics": val_online_metrics,
+                "train_online_metrics": train_online_metrics,
+            },
+            f"{epoch_dir}/metrics.pt",
+        )
 
-            # we track the same thing for a small subset of the train set
-            train_online = run_model_eval(model, online_worlds_train, max_timesteps, split='train')
+        if wandb_logging:
+            wandb.log(
+                {
+                    "epoch/online_val_num_correct": np.max(
+                        val_online_metrics["num_correct"]
+                    ),
+                    "epoch": epoch,
+                }
+            )
 
-            # breakpoint()
-            results = {
-                'online_results_eval': eval_online, 
-                'seq_pred_losses_eval': eval_seq_pred_losses,
-                'online_results_train': train_online,
-            }
+            wandb.log(
+                {
+                    "epoch/online_train_num_correct": np.max(
+                        train_online_metrics["num_correct"]
+                    ),
+                    "epoch": epoch,
+                }
+            )
 
-            torch.save(results, os.path.join(eval_dir, 'eval_results.pt'))
+            wandb.log(
+                {
+                    "epoch/online_val": wandb.Image(
+                        eval.visualize_eval_metrics(
+                            val_online_metrics,
+                            return_image=True,
+                            save_path=f"{epoch_dir}/online_val.png",
+                        )
+                    ),
+                    "epoch": epoch,
+                }
+            )
 
-            mean_online_returns_eval = np.mean(results['online_results_eval']['returns']) 
-            mean_online_returns_train = np.mean(results['online_results_train']['returns']) 
-            mean_seq_pred_loss = np.mean(eval_seq_pred_losses)
-
-            ckpt_updated = False 
-            if mean_seq_pred_loss < best_val_loss: 
-                ckpt_updated = True
-                best_val_loss = mean_seq_pred_loss 
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(), 
-                    'optimizer_state_dict': optimizer.state_dict()
-                }, os.path.join(logdir, 'ckpt.pt'))
-        
-            print(f'Epoch {epoch} evaluation results:\n'
-                f'\tEVAL mean online returns(N=10, ↑): {mean_online_returns_eval:.3f}{" (new best!)" if ckpt_updated else ""}\n'
-                f'\tTRAIN mean online returns(N=10, ↑): {mean_online_returns_train:.3f}'
-                f'\tmean seq pred loss(↓): {mean_seq_pred_loss:.3f}\n')
+            wandb.log(
+                {
+                    "epoch/online_train": wandb.Image(
+                        eval.visualize_eval_metrics(
+                            train_online_metrics,
+                            return_image=True,
+                            save_path=f"{epoch_dir}/online_train.png",
+                        )
+                    ),
+                    "epoch": epoch,
+                }
+            )

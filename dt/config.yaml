@@ -1,6 +1,23 @@
-train_configs:
-  - max_epochs: 100
-  - batch_size: 128
-  - learning_rate: 3e-4
-model_configs:
-  - vocab_size:
+model:
+  vocab_size: 243  # 81 * 3
+  model_type: "reward_conditioned"
+  reward_type: "delayed" 
+  predict_rtg: True
+  max_seq_len: 50
+  max_timestep: 300
+  n_layer: 6
+  n_head: 8
+  n_embd: 128
+meta:
+  exp_name: 'dt_default'
+  online_n_worlds: 50
+  online_max_steps_in_world: 5000
+  seed: 1112
+  wandb: True 
+train:
+  learning_rate: 0.0001
+data:
+  batch_size: 128
+  fix_k: False
+  train_path: 'assets/trajectories_train'
+  val_path: 'assets/trajectories_val'

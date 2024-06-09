@@ -260,13 +260,16 @@ int main(int argc, char *argv[]) {
         order[i] = stoi(argv[i + 1]); 
     }
 
-    char *save_dir = argv[6];
-    int numPuzzles = stoi(argv[7]);
-    int num_meta_args = 8; 
+    char *uid = argv[6]; 
+    char *save_dir = argv[7];
+    int numPuzzles = stoi(argv[8]);
+    int num_meta_args = 9; 
     
     // printf("Solving %d puzzles...\n", numPuzzles);
 
     Puzzle *puzzles = new Puzzle[numPuzzles]; 
+    vector<string> save_dirs; 
+
 
     for (int i = 0; i < numPuzzles; i++) {
         char *puzzleName = argv[num_meta_args + (4 * i)];
@@ -286,6 +289,8 @@ int main(int argc, char *argv[]) {
         }
         puzzleStr[numChars] = '\0';
 
+        save_dirs.push_back(string(save_dir) + string(puzzleName) + "/");
+        // cout << save_dirs[save_dirs.size() - 1] << " " << puzzleName << " " << uid << endl;
         // cout << puzzleName << endl;
         // cout << puzzleStr << endl;
 
@@ -498,7 +503,7 @@ int main(int argc, char *argv[]) {
             Puzzle puzzle = puzzles[i];
             const auto start = steady_clock::now();
 
-            Grid g(puzzle.w, puzzle.h, puzzle.s, puzzle.name, save_dir);
+            Grid g(puzzle.w, puzzle.h, puzzle.s, uid, save_dirs[i]);
 
             int max_iter = 50;
             int cur_iter = 0;
@@ -506,9 +511,9 @@ int main(int argc, char *argv[]) {
             while (g.solve() == Grid::KEEP_GOING && cur_iter++ < max_iter) { }
             const auto finish = steady_clock::now();
 
-            ofstream f(string(save_dir) + puzzle.name + string(".html"));
+            // ofstream f(string(save_dir) + puzzle.name + string(".html"));
 
-            g.write(f, start, finish);
+            // g.write(f, start, finish);
 
             // cout << puzzle.name << ": " << format_time(start, finish) << ", ";
 
