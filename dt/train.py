@@ -1,18 +1,16 @@
-"""
-Very quick and dirty way to test the training flow. Need to set up proper training / eval pipeline
-"""
-import torch 
+import torch
 import numpy as np
 from tqdm import tqdm
+import sys
+import os
 from datetime import datetime
-import os 
-import yaml 
-import argparse
-from dataclasses import dataclass
 
-from torch.utils.data import DataLoader
-import dt_model
-from data import nurikabe_dataset, constants
+from data import nurikabe_dataset
+import dt_model, options, eval
+
+wandb_logging = False
+
+eval.set_seed(1112)
 
 class TrainerConfig:
     # optimization parameters
@@ -21,140 +19,212 @@ class TrainerConfig:
     learning_rate = 3e-4
     betas = (0.9, 0.95)
     grad_norm_clip = 1.0
-    weight_decay = 0.1 # only applied on matmul weights
+    weight_decay = 0.1  # only applied on matmul weights
     # learning rate decay params: linear warmup followed by cosine decay to 10% of original
     lr_decay = False
-    warmup_tokens = 375e6 # these two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
-    final_tokens = 260e9 # (at what point we reach 10% of original LR)
+    warmup_tokens = 375e6  # these two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
+    final_tokens = 260e9  # (at what point we reach 10% of original LR)
     # checkpoint settings
     ckpt_path = None
-    num_workers = 0 # for DataLoader
+    num_workers = 0  # for DataLoader
 
     def __init__(self, **kwargs):
-        for k,v in kwargs.items():
+        for k, v in kwargs.items():
             setattr(self, k, v)
 
-def train_iter(model, loader, optimizer):
-    pbar = tqdm(loader, total=len(loader), desc='train', position=1)
-    train_losses = []
 
-    for x, y, r, t in pbar:
-        x, y, r, t = (elem.to(model.device) for elem in (x, y, r, t))
-        _, loss = model(x, y, y, r, t)
+def get_model_config(**model_args):
+    return dt_model.GPTConfig(**model_args)
+
+
+def get_train_config(**kwargs):
+    return TrainerConfig(**kwargs)
+
+
+def start_wandb(meta_args, cfg):
+    run = wandb.init(
+        entity="seungwoo-simon-kim",
+        project="nubes",
+        name=meta_args.exp_name,
+        config=cfg,
+    )
+
+    run.define_metric("iter")
+    run.define_metric("epoch")
+
+    run.define_metric("iter/train_loss", step_metric="iter")
+
+    run.define_metric("epoch/train_loss", step_metric="epoch")
+    run.define_metric("epoch/val_loss", step_metric="epoch")
+
+    run.define_metric("epoch/online_val_num_correct", step_metric="epoch")
+    run.define_metric("epoch/online_train_num_correct", step_metric="epoch")
+
+    run.define_metric("epoch/online_val", step_metric="epoch")
+    run.define_metric("epoch/online_train", step_metric="epoch")
+
+
+def train(model, optimizer, loader, device, itr):
+    pbar = tqdm(loader, total=len(loader), desc="train")
+    losses = []
+    for idx, data in enumerate(pbar):
+        states, actions, rtgs, timesteps = (x.to(device) for x in data)
+        target_actions = torch.clone(actions)
+
+        _, loss = model(states, actions, target_actions, rtgs, timesteps)
 
         loss = loss.mean()
-        model.zero_grad() 
-        loss.backward() 
-        optimizer.step() 
+        model.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-        pbar.postfix = f'train_loss={train_losses[-1]:.3f}'
-        train_losses.append(loss.item())
+        losses.append(loss.item())
+        pbar.postfix = f"loss={losses[-1]:.3f}"
 
-    return np.mean(train_losses)
+        if idx % 25 == 0 and wandb_logging:
+            wandb.log({"iter/train_loss": losses[-1], "iter": itr})
 
-if __name__ == '__main__':
-    logdir = 'runs'
-    logdir = os.path.join(logdir, datetime.now().strftime('%Y_%m_%d_%H_%M_%S'))
-    os.makedirs(logdir, exist_ok=True)
+        itr += 1
 
-    parser = argparse.ArgumentParser() 
+    if wandb_logging:
+        wandb.log({"epoch/train_loss": np.mean(losses), "epoch": epoch})
 
-    parser.add_argument('--path_to_cfg', type=str)
-    args = parser.parse_args() 
-
-    with open(args.path_to_cfg) as f:
-        cfg = yaml.load(f) 
-    
-    tcfg = TrainerConfig(**cfg['train_configs'])
-    tcfg.ckpt_path = logdir
-    
-    mconf = dt_model.GPTConfig(
-        
-        9**2 * train_dataset.action_space, max_seq_len * 3,
-                                           n_layer=6, n_head=8, n_embd=128, model_type=model_type, max_timestep=max_timesteps)
+    return itr
 
 
-    # this is K in paper
-    max_seq_len = 30
-    # this is how long an episode can be in general
-    # the way I understood it was that an episode can be max_timesteps long 
-    # and we sample a sequence of size K from an episode. I could be completely wrong on this though
-    max_timesteps = 81
+if __name__ == "__main__":
+    opt_cmd = options.parse_arguments(sys.argv[1:])
+    cfg = options.set(opt_cmd=opt_cmd, verbose=True)
 
-    # probably just need to fix this
-    model_type = 'reward_conditioned'
-    mps_device = torch.device("mps:0")
+    meta_args = cfg.meta
+    train_args = cfg.train
+    model_args = cfg.model
+    data_args = cfg.data
 
-    # poor man's train/val split...
-    train_dataset = nurikabe_dataset.NurikabeDataset('data/microsoft_logicgamesonline_trajectories.zip', max_seq_len, 9, 9)
+    log_dir = os.path.join(
+        "logs", meta_args.exp_name, datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    )
+    os.makedirs(log_dir, exist_ok=True)
 
-    train_size = int(len(train_dataset) * 0.8)
-    val_size = len(train_dataset) - train_size
+    if meta_args.get("wandb", False):
+        import wandb
 
-    train_dataset.traj_files = train_dataset.traj_files[:train_size]
-    train_dataset.soln_files = train_dataset.soln_files[:train_size]
+        start_wandb(meta_args, cfg)
+        wandb_logging = True
 
-    val_dataset = nurikabe_dataset.NurikabeDataset('data/microsoft_logicgamesonline_trajectories.zip', max_seq_len, 9, 9)
-    val_dataset.traj_files = val_dataset.traj_files[train_size:]
-    val_dataset.soln_files = val_dataset.soln_files[train_size:]
-    
-    print(f'Train: {len(train_dataset)}, Val: {len(val_dataset)}')
+    options.save_options_file(log_dir, cfg)
 
-    # this is mostly from the code directly
-    tconf = TrainerConfig(max_epochs=500, batch_size=128, learning_rate=1e-3,
-                          lr_decay=True, warmup_tokens=512*20,
-                          num_workers=1, model_type='reward_conditioned', max_timestep=max_timesteps)
+    mconf = get_model_config(**model_args)
+    tconf = get_train_config(**train_args)
+    model = dt_model.GPT(mconf)
 
-    train_loader = DataLoader(train_dataset, shuffle=True,
-                        batch_size=tconf.batch_size,
-                        num_workers=tconf.num_workers)
-    
-    val_loader = DataLoader(val_dataset, shuffle=True,
-                    batch_size=tconf.batch_size,
-                    num_workers=tconf.num_workers)
-
-    # same here
-    mconf = decision_transformer.GPTConfig(9**2 * train_dataset.action_space, max_seq_len * 3,
-                    n_layer=6, n_head=8, n_embd=128, model_type=model_type, max_timestep=max_timesteps)
-
-    model = decision_transformer.GPT(mconf).to(mps_device)
     optimizer = model.configure_optimizers(tconf)
+    if meta_args.get("ckpt"):
+        sd = torch.load(meta_args.ckpt, map_location="cpu")
+        model.load_state_dict(sd["model_state_dict"])
+        optimizer.load_state_dict(sd["optimizer_state_dict"])
 
-    eval_losses_per_epoch = []
-    train_losses = []
-    best_val_loss = float('inf')
+    device = torch.device(f'cuda:{meta_args.get("device", 0)}')
 
-    # poor man's train/val loop...
-    # for each epoch, even if we use the same trajectory
-    # we would be getting a different K-length sequence from that trajectory
-    for epoch in tqdm(range(tconf.max_epochs), desc='epoch', position=0):
-        pbar = tqdm(train_loader, total=len(train_loader), desc='train', position=1)
-        for x, y, r, t in pbar:
-            logits, loss = model(x.to(mps_device), y.to(mps_device), y.to(mps_device), r.to(mps_device), t.to(mps_device))
-            loss = loss.mean()
-            train_losses.append(loss.item())
+    model = model.to(device)
 
-            model.zero_grad()
-            loss.backward()
-            optimizer.step()
+    train_loader = nurikabe_dataset.get_loader(
+        data_dir=data_args.train_path,
+        batch_size=data_args.batch_size,
+        reward_type=model_args.reward_type,
+        fix_k=data_args.fix_k,
+        max_seq_len=model_args.max_seq_len,
+    )
 
-            pbar.postfix = f'train_loss={train_losses[-1]:.3f}'
+    val_loader = nurikabe_dataset.get_loader(
+        data_dir=data_args.val_path,
+        batch_size=data_args.batch_size,
+        reward_type=model_args.reward_type,
+        fix_k=data_args.fix_k,
+        max_seq_len=model_args.max_seq_len,
+    )
 
-        eval_losses = []
-        with torch.no_grad():
-            pbar = tqdm(val_loader, total=len(val_loader), desc='val', position=1)
-            for x, y, r, t in pbar:
-                logits, loss = model(x.to(mps_device), y.to(mps_device), y.to(mps_device), r.to(mps_device), t.to(mps_device))
-                loss = loss.mean()
-                eval_losses.append(loss.item())
+    itr = 0
+    for epoch in tqdm(range(tconf.max_epochs), desc="epoch"):
+        itr = train(model, optimizer, train_loader, device, itr)
 
-                pbar.postfix = f'eval_loss={eval_losses[-1]:.3f}'
+        eval_losses = eval.run_eval(model, val_loader, device)
 
-        eval_losses_per_epoch.append(np.mean(eval_losses))
+        if wandb_logging:
+            wandb.log({"epoch/val_loss": np.mean(eval_losses)})
 
-        np.save(os.path.join(logdir, 'eval_losses.npy'), np.array(eval_losses_per_epoch))
-        np.save(os.path.join(logdir, 'train_losses.npy'), np.array(train_losses))
+        epoch_dir = os.path.join(log_dir, f"e{epoch:05d}")
+        os.makedirs(epoch_dir, exist_ok=True)
 
-        if eval_losses_per_epoch[-1] < best_val_loss:
-            torch.save(model.state_dict(), os.path.join(logdir, 'ckpt.pt'))
-            best_val_loss = eval_losses_per_epoch[-1]
+        val_online_metrics = eval.run_online(
+            model,
+            val_loader.dataset,
+            meta_args.online_n_worlds,
+            max_timestep=mconf.max_timestep,
+            device=device,
+            split="val",
+            max_steps_in_env=meta_args.online_max_steps_in_world,
+        )
+
+        train_online_metrics = eval.run_online(
+            model,
+            train_loader.dataset,
+            meta_args.online_n_worlds,
+            max_timestep=mconf.max_timestep,
+            device=device,
+            split="train",
+            max_steps_in_env=meta_args.online_max_steps_in_world,
+        )
+
+        torch.save(
+            {
+                "val_online_metrics": val_online_metrics,
+                "train_online_metrics": train_online_metrics,
+            },
+            f"{epoch_dir}/metrics.pt",
+        )
+
+        if wandb_logging:
+            wandb.log(
+                {
+                    "epoch/online_val_num_correct": np.max(
+                        val_online_metrics["num_correct"]
+                    ),
+                    "epoch": epoch,
+                }
+            )
+
+            wandb.log(
+                {
+                    "epoch/online_train_num_correct": np.max(
+                        train_online_metrics["num_correct"]
+                    ),
+                    "epoch": epoch,
+                }
+            )
+
+            wandb.log(
+                {
+                    "epoch/online_val": wandb.Image(
+                        eval.visualize_eval_metrics(
+                            val_online_metrics,
+                            return_image=True,
+                            save_path=f"{epoch_dir}/online_val.png",
+                        )
+                    ),
+                    "epoch": epoch,
+                }
+            )
+
+            wandb.log(
+                {
+                    "epoch/online_train": wandb.Image(
+                        eval.visualize_eval_metrics(
+                            train_online_metrics,
+                            return_image=True,
+                            save_path=f"{epoch_dir}/online_train.png",
+                        )
+                    ),
+                    "epoch": epoch,
+                }
+            )
